@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 from collections import OrderedDict
 from typing import Any
 
@@ -26,7 +27,12 @@ _MEMORY_MAX_ENTRIES = 512
 _memory: "OrderedDict[str, list[dict[str, Any]]]" = OrderedDict()
 
 _redis: Any | None = None
-_redis_disabled = False
+
+# Redis is not gated on at startup, so it may simply not be up yet. Back off
+# for a cooldown after a failed connect and try again later, rather than
+# disabling the shared cache for the lifetime of the process.
+_RETRY_COOLDOWN_SECONDS = 30.0
+_retry_after = 0.0
 
 
 def cache_key(notes: list[str], capacity_kwh: float, minimum_kwh: float) -> str:
@@ -45,12 +51,16 @@ def cache_key(notes: list[str], capacity_kwh: float, minimum_kwh: float) -> str:
 
 
 async def _get_redis() -> Any | None:
-    """Lazily connect to Redis; disable permanently on failure."""
-    global _redis, _redis_disabled
-    if _redis_disabled or not settings.redis_url:
+    """Lazily connect to Redis, retrying after a cooldown on failure."""
+    global _redis, _retry_after
+
+    if not settings.redis_url:
         return None
     if _redis is not None:
         return _redis
+    if time.monotonic() < _retry_after:
+        return None
+
     try:
         import redis.asyncio as aioredis
 
@@ -66,12 +76,20 @@ async def _get_redis() -> Any | None:
         logger.info("Redis interpretation cache connected.")
         return _redis
     except Exception as exc:  # noqa: BLE001
+        _retry_after = time.monotonic() + _RETRY_COOLDOWN_SECONDS
         logger.warning(
-            "Redis unavailable (%s) — using in-process cache only.",
+            "Redis unavailable (%s) — in-process cache only; retrying in %.0fs.",
             type(exc).__name__,
+            _RETRY_COOLDOWN_SECONDS,
         )
-        _redis_disabled = True
         return None
+
+
+def _drop_connection() -> None:
+    """Forget a broken connection so the next call reconnects after cooldown."""
+    global _redis, _retry_after
+    _redis = None
+    _retry_after = time.monotonic() + _RETRY_COOLDOWN_SECONDS
 
 
 async def get(key: str) -> list[dict[str, Any]] | None:
@@ -88,6 +106,7 @@ async def get(key: str) -> list[dict[str, Any]] | None:
         raw = await client.get(key)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Redis read failed (%s); ignoring.", type(exc).__name__)
+        _drop_connection()
         return None
     if not raw:
         return None
@@ -115,6 +134,7 @@ async def set(key: str, value: list[dict[str, Any]]) -> None:
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Redis write failed (%s); ignoring.", type(exc).__name__)
+        _drop_connection()
 
 
 def _remember(key: str, value: list[dict[str, Any]]) -> None:
@@ -126,7 +146,8 @@ def _remember(key: str, value: list[dict[str, Any]]) -> None:
 
 async def close() -> None:
     """Close the Redis connection on shutdown."""
-    global _redis
+    global _redis, _retry_after
+    _retry_after = 0.0
     if _redis is not None:
         try:
             await _redis.aclose()
@@ -136,5 +157,7 @@ async def close() -> None:
 
 
 def clear_memory() -> None:
-    """Drop the in-process cache (used by tests)."""
+    """Drop the in-process cache and any connection cooldown (used by tests)."""
+    global _retry_after
     _memory.clear()
+    _retry_after = 0.0

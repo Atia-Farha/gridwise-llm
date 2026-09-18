@@ -12,9 +12,11 @@
 #                               injected into both services, so the cache URL
 #                               and the Redis server always agree.
 #
-# Magic variables are resolved by Coolify before the stack is started; running
-# this file with plain `docker compose` locally is covered by the defaults in
-# docker-compose.local.yml instead.
+# NOTE ON PORTS: this file deliberately publishes NO host ports. Coolify's
+# reverse proxy reaches the container over the internal network using the
+# FQDN variable above. Publishing "8000:8000" here would bind the VPS host
+# port and collide with anything else already listening on it — which is
+# exactly the "port is already allocated" failure it would produce.
 
 services:
   gridwise:
@@ -22,6 +24,11 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+
+    # Visible to the Coolify proxy and to Redis on the internal network only.
+    expose:
+      - "8000"
+
     environment:
       # Public URL + TLS, provisioned by Coolify for container port 8000.
       - SERVICE_FQDN_GRIDWISE_8000
@@ -44,9 +51,14 @@ services:
 
       - PORT=8000
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+    # Start order only — deliberately NOT `condition: service_healthy`.
+    # The cache is an accelerator: the API reconnects to Redis on its own and
+    # serves correctly without it, so gating startup on Redis health would
+    # turn an optional dependency into a single point of failure.
     depends_on:
-      redis:
-        condition: service_healthy
+      - redis
+
     healthcheck:
       # stdlib probe: python:*-slim ships no curl or wget.
       test:
@@ -62,22 +74,30 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    # Cache only: persistence is disabled so a restart costs nothing but a
-    # cold cache, and no volume has to be managed or backed up.
+
+    # The password is passed through the environment rather than interpolated
+    # straight into the command line: it keeps the literal value out of the
+    # container's process list, and gives Coolify an `environment:` entry to
+    # detect the SERVICE_PASSWORD_ magic variable on.
+    environment:
+      - REDIS_PASSWORD=${SERVICE_PASSWORD_REDIS}
+
+    # Cache only: persistence is disabled, so a restart costs nothing but a
+    # cold cache and no volume has to be managed or backed up.
+    # `$$` escapes to a literal `$` for the container shell.
     command:
-      - redis-server
-      - --requirepass
-      - ${SERVICE_PASSWORD_REDIS}
-      - --save
-      - ""
-      - --appendonly
-      - "no"
-      - --maxmemory
-      - 128mb
-      - --maxmemory-policy
-      - allkeys-lru
+      - sh
+      - -c
+      - >
+        exec redis-server
+        --requirepass "$$REDIS_PASSWORD"
+        --save ""
+        --appendonly no
+        --maxmemory 128mb
+        --maxmemory-policy allkeys-lru
+
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${SERVICE_PASSWORD_REDIS}", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 10s
       timeout: 3s
       retries: 5

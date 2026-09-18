@@ -22,9 +22,10 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - PORT=8000
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    # Start order only. The cache is optional by design, so the API must come
+    # up whether or not Redis does.
     depends_on:
-      redis:
-        condition: service_healthy
+      - redis
     healthcheck:
       test:
         - CMD
