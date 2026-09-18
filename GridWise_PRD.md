@@ -46,7 +46,7 @@ flowchart LR
 
 | # | Category | Pts | Our Strategy |
 |---|----------|-----|--------------|
-| 1 | **LLM Directive Interpretation** | 25 | Gemini 2.5 Flash with structured output + few-shot prompting. Cover all 6 directive types + `no_op`. Handle paraphrases via LLM generalization. |
+| 1 | **LLM Directive Interpretation** | 25 | Gemini 3.6 Flash with structured output + few-shot prompting. Cover all 6 directive types + `no_op`. Handle paraphrases via LLM generalization. |
 | 2 | **Directive Application & Constraint Correctness** | 25 | Every validated directive becomes a hard LP constraint. Post-solve replay verifies every directive was actually applied. |
 | 3 | **Optimization Quality** | 10 | OR-Tools LP solver (CBC backend) guarantees globally optimal solution for LP formulation. `quality_ratio = min(1, optimal_cost / our_cost)`. |
 | 4 | **API Contract & Schema** | 10 | Pydantic models enforce exact schema. Request validation returns 400/422. Response echoes `scenario_id`. |
@@ -74,7 +74,7 @@ flowchart LR
 |-----------|--------|-----------|
 | **Web Framework** | **FastAPI** (latest) | Async, auto-OpenAPI docs, Pydantic validation, fastest Python framework |
 | **ASGI Server** | **Uvicorn** | Production-grade, works with FastAPI |
-| **LLM Provider** | **Google Gemini 2.5 Flash** | Fast (low latency for p95 target), cost-effective, structured JSON output mode, excellent NLU |
+| **LLM Provider** | **Google Gemini 3.6 Flash** | Fast (low latency for p95 target), cost-effective, structured JSON output mode, excellent NLU |
 | **LLM SDK** | **`google-genai`** (latest) | Official Google GenAI SDK |
 | **LP Solver** | **Google OR-Tools** (`ortools`) | Free, fast, production-grade LP/MIP solver; CBC backend is more than sufficient for 24-variable LP |
 | **Data Validation** | **Pydantic v2** | Strict schema validation, JSON serialization, comes with FastAPI |
@@ -103,7 +103,7 @@ python-dotenv>=1.0.0
 > - Excellent Docker compatibility (pre-built wheels)
 
 > [!IMPORTANT]
-> **Why Gemini 2.5 Flash over GPT-4o / Claude?**
+> **Why Gemini 3.6 Flash over GPT-4o / Claude?**
 > - Native structured JSON output mode (no parsing failures)
 > - Very low latency (~0.5-1.5s for small prompts) — critical for p95 < 5s target
 > - Free tier quota is generous for hackathon usage
@@ -164,7 +164,7 @@ POST /optimize-energy
   │
   ├─ 3. LLM Interpreter:
   │     ├─ Constructs prompt with scenario context + operator notes
-  │     ├─ Calls Gemini 2.5 Flash with structured output schema
+  │     ├─ Calls Gemini 3.6 Flash with structured output schema
   │     ├─ Receives JSON array of directive interpretations
   │     └─ Returns raw LLM output (untrusted)
   │
@@ -852,7 +852,7 @@ curl -X POST http://localhost:8000/optimize-energy \
 | PORT | No | Server port (default: 8000) |
 
 ## LLM Role
-Gemini 2.5 Flash interprets operator_notes into structured directives.
+Gemini 3.6 Flash interprets operator_notes into structured directives.
 LLM output is NOT trusted — it passes through deterministic guardrails
 before being applied to the LP optimizer.
 
@@ -872,7 +872,7 @@ docker run -d -p 8000:8000 -e GEMINI_API_KEY=... ghcr.io/your-team/gridwise-llm:
 
 ## Dependencies
 - FastAPI, Uvicorn, Pydantic v2
-- google-genai (Gemini 2.5 Flash)
+- google-genai (Gemini 3.6 Flash)
 - ortools (LP solver)
 
 ## Known Limitations
@@ -1004,7 +1004,7 @@ As a solo developer, everything is sequential. The timeline is adjusted to front
 
 | Question | Decision |
 |----------|----------|
-| **LLM Provider** | ✅ Google Gemini 2.5 Flash — API key ready |
+| **LLM Provider** | ✅ Google Gemini 3.6 Flash — API key ready |
 | **Deployment** | ✅ Coolify (primary) or Render (backup) |
 | **Docker Registry** | ✅ Create Docker Hub free account during event, or use Coolify's built-in registry |
 | **Team Size** | ✅ Solo developer — sequential timeline, no parallelization, strict priority order |

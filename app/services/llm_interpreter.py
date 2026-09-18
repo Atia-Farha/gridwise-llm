@@ -1,14 +1,16 @@
-"""LLM Interpreter — calls Gemini 2.5 Flash to interpret operator notes.
+"""LLM Interpreter — calls Gemini to interpret operator notes.
 
-The LLM output is intentionally treated as UNTRUSTED until the guardrail
-validator has cleared it.  This module only calls the model and returns raw
-parsed JSON; it never applies any directive to the optimizer.
+Model: configured via GEMINI_MODEL env var (default: gemini-3.6-flash).
+Key fix: AFC (Automatic Function Calling) must be explicitly disabled.
+Without it, generate_content hangs indefinitely on Flash models.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
+import time
 from typing import Any
 
 from google import genai
@@ -20,8 +22,10 @@ from app.utils.exceptions import LLMInterpretationError
 
 logger = logging.getLogger(__name__)
 
+_MAX_RETRIES = 5
+
 # ---------------------------------------------------------------------------
-# Gemini client — initialised once at module load
+# Gemini client (singleton)
 # ---------------------------------------------------------------------------
 _client: genai.Client | None = None
 
@@ -34,175 +38,213 @@ def get_client() -> genai.Client:
 
 
 # ---------------------------------------------------------------------------
-# Prompt construction
+# Prompt
 # ---------------------------------------------------------------------------
 
 _SYSTEM_INSTRUCTION = """\
 You are an energy operations interpreter for a smart campus microgrid.
-Your ONLY job is to analyse each operator note and classify it into exactly
-one of the following directive types:
+Analyse each operator note and return a JSON array.
+Output ONLY the raw JSON array — no markdown fences, no extra text.
 
-  1. solar_reduction        — reduces usable solar energy during specific hours
-  2. minimum_battery_reserve — requires battery energy stays at or above a
-                               minimum level during specific hours
-  3. no_charge_window       — battery charging is unavailable during specific hours
-  4. no_discharge_window    — battery discharging is unavailable during specific hours
-  5. max_grid_window        — grid import must not exceed a stated kWh cap during
-                               specific hours
-  6. no_op                  — the note does NOT affect the 24-hour energy schedule
-                               (it is a distractor)
+DIRECTIVE TYPES (use exactly these strings):
+  solar_reduction          - reduces usable solar energy during specific hours
+  minimum_battery_reserve  - battery must stay >= minimum kWh during specific hours
+  no_charge_window         - battery charging blocked during specific hours
+  no_discharge_window      - battery discharging blocked during specific hours
+  max_grid_window          - grid import <= cap kWh during specific hours
+  no_op                    - note does NOT affect the energy schedule
 
-━━━ CRITICAL RULES ━━━
-• Return EXACTLY one interpretation object per note, in note_index order 0, 1, … N-1.
-• Time windows use WHOLE-HOUR intervals that are START-INCLUSIVE and END-EXCLUSIVE.
-    "1 PM to 3 PM"     → hours [13, 14]
-    "2 AM until 5 AM"  → hours [2, 3, 4]
-    "6 PM to 9 PM"     → hours [18, 19, 20]
-    "midnight to 3 AM" → hours [0, 1, 2]
-• For solar_reduction, "factor" is the REMAINING usable fraction (not the reduction):
-    "80% reduction"        → factor 0.2
-    "drops to 25%"         → factor 0.25
-    "one-fifth of normal"  → factor 0.2
-    "only 30% available"   → factor 0.3
-• Hours must be unique integers 0-23 returned in ascending order.
-• For no_op: applies must be false and structured_adjustment must be null.
-• For every other directive: applies must be true and structured_adjustment
-  must contain the required fields.
-• Do NOT invent demand, solar, tariff, or battery values not present in the note.
-• Do NOT create a directive type that is not in the list above.
+TIME RULE: hours are START-INCLUSIVE, END-EXCLUSIVE, whole integers 0-23.
+  "1 PM to 3 PM"     -> [13, 14]
+  "2 AM until 5 AM"  -> [2, 3, 4]
+  "midnight to 3 AM" -> [0, 1, 2]
+  "noon until 2 PM"  -> [12, 13]
 
-━━━ EXAMPLES ━━━
+SOLAR FACTOR: factor = REMAINING fraction (not the reduction).
+  "80% reduction"  -> factor 0.2
+  "drops to 25%"   -> factor 0.25
+  "roughly 25%"    -> factor 0.25
 
-Note: "Solar output will drop to about 20% from 1 PM to 3 PM."
-→ { "note_index": 0, "applies": true, "directive_type": "solar_reduction",
-    "structured_adjustment": {"hours": [13, 14], "factor": 0.2},
-    "explanation": "Solar availability reduced to 20% during stated window." }
+RULES:
+  no_op  -> applies=false, structured_adjustment=null
+  others -> applies=true,  structured_adjustment object with "hours" array
 
-Note: "Do not charge the battery between 2 PM and 4 PM."
-→ { "note_index": 0, "applies": true, "directive_type": "no_charge_window",
-    "structured_adjustment": {"hours": [14, 15]},
-    "explanation": "Battery charging blocked during the 2–4 PM window." }
+structured_adjustment shapes:
+  solar_reduction:         {"hours":[...], "factor": 0.X}
+  minimum_battery_reserve: {"hours":[...], "minimum_energy_kwh": N}
+  no_charge_window:        {"hours":[...]}
+  no_discharge_window:     {"hours":[...]}
+  max_grid_window:         {"hours":[...], "max_grid_kwh": N}
+  no_op:                   null
 
-Note: "Keep at least 120 kWh in reserve from 6 PM until 9 PM."
-→ { "note_index": 0, "applies": true,
-    "directive_type": "minimum_battery_reserve",
-    "structured_adjustment": {"hours": [18, 19, 20], "minimum_energy_kwh": 120},
-    "explanation": "Minimum 120 kWh battery reserve required from 6–9 PM." }
+EXAMPLE:
+Input notes:
+  Note 0: "Solar output will drop to about 20% from 1 PM to 3 PM."
+  Note 1: "The cafeteria menu changes tomorrow."
 
-Note: "Grid import must stay below 80 kWh during peak hours 5 PM to 8 PM."
-→ { "note_index": 0, "applies": true, "directive_type": "max_grid_window",
-    "structured_adjustment": {"hours": [17, 18, 19], "max_grid_kwh": 80},
-    "explanation": "Grid capped at 80 kWh per hour from 5–8 PM." }
-
-Note: "The cafeteria menu changes tomorrow."
-→ { "note_index": 0, "applies": false, "directive_type": "no_op",
-    "structured_adjustment": null,
-    "explanation": "This note does not affect the 24-hour energy schedule." }
-
-Note: "Battery discharging will be blocked from 10 AM to noon for system tests."
-→ { "note_index": 0, "applies": true, "directive_type": "no_discharge_window",
-    "structured_adjustment": {"hours": [10, 11]},
-    "explanation": "Battery discharging blocked during 10 AM–noon maintenance." }
+Output (exactly this format, nothing else):
+[{"note_index":0,"applies":true,"directive_type":"solar_reduction","structured_adjustment":{"hours":[13,14],"factor":0.2},"explanation":"Solar reduced to 20% from 1-3 PM."},{"note_index":1,"applies":false,"directive_type":"no_op","structured_adjustment":null,"explanation":"Irrelevant to energy schedule."}]
 """
 
 
 def _build_user_prompt(request: ScenarioRequest) -> str:
     notes_block = "\n".join(
-        f'  Note {i}: "{note}"'
+        f'Note {i}: "{note}"'
         for i, note in enumerate(request.operator_notes)
     )
+    n = len(request.operator_notes)
     return (
-        f"Scenario ID: {request.scenario_id}\n"
-        f"Battery capacity: {request.battery.capacity_kwh} kWh\n"
-        f"Battery base minimum reserve: {request.battery.minimum_energy_kwh} kWh\n"
-        f"Number of operator notes: {len(request.operator_notes)}\n\n"
-        f"Operator Notes:\n{notes_block}\n\n"
-        f"Return a JSON array with exactly {len(request.operator_notes)} "
-        f"interpretation object(s), one per note, in note_index order."
+        f"Battery capacity: {request.battery.capacity_kwh} kWh | "
+        f"Minimum reserve: {request.battery.minimum_energy_kwh} kWh\n\n"
+        f"{notes_block}\n\n"
+        f"Return a JSON array with exactly {n} element(s). "
+        f"Output ONLY valid JSON starting with [ and ending with ]."
     )
 
 
 # ---------------------------------------------------------------------------
-# Gemini response schema — forces structured JSON output
+# Generation config — AFC disabled, plain text, no ThinkingConfig
 # ---------------------------------------------------------------------------
 
-def _build_response_schema(n_notes: int) -> dict[str, Any]:
-    """Build the Gemini response schema for exactly n_notes directives."""
-    item_schema = {
-        "type": "OBJECT",
-        "properties": {
-            "note_index": {"type": "INTEGER"},
-            "applies": {"type": "BOOLEAN"},
-            "directive_type": {
-                "type": "STRING",
-                "enum": [
-                    "solar_reduction",
-                    "minimum_battery_reserve",
-                    "no_charge_window",
-                    "no_discharge_window",
-                    "max_grid_window",
-                    "no_op",
-                ],
-            },
-            "structured_adjustment": {"type": "OBJECT", "nullable": True},
-            "explanation": {"type": "STRING"},
-        },
-        "required": [
-            "note_index",
-            "applies",
-            "directive_type",
-            "structured_adjustment",
-            "explanation",
-        ],
-    }
-    return {
-        "type": "ARRAY",
-        "items": item_schema,
-        "minItems": n_notes,
-        "maxItems": n_notes,
-    }
+def _make_config() -> types.GenerateContentConfig:
+    """Build the generation config.
+
+    CRITICAL: automatic_function_calling must be disabled.
+    When AFC is enabled (the SDK default), generate_content hangs
+    indefinitely on Flash models waiting for function call resolution.
+    """
+    return types.GenerateContentConfig(
+        system_instruction=_SYSTEM_INSTRUCTION,
+        temperature=0.0,
+        max_output_tokens=4096,
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(
+            disable=True,
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
-# Public interpreter function
+# Response text extraction (skips thinking parts if any)
+# ---------------------------------------------------------------------------
+
+def _extract_text_from_response(response: Any) -> str | None:
+    """Extract non-thought text from a Gemini response."""
+    try:
+        parts: list[str] = []
+        for candidate in (response.candidates or []):
+            for part in (getattr(candidate.content, "parts", None) or []):
+                if getattr(part, "thought", False):
+                    continue  # skip thinking tokens
+                t = getattr(part, "text", None)
+                if t:
+                    parts.append(t)
+        result = "".join(parts).strip()
+        return result or None
+    except Exception:
+        pass
+    try:
+        t = response.text
+        return t.strip() if t and t.strip() else None
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# JSON extraction
+# ---------------------------------------------------------------------------
+
+def _extract_json_array(text: str) -> list[dict[str, Any]]:
+    """Extract a JSON array from model text using multiple strategies."""
+    text = text.strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    text = text.strip()
+
+    # Strategy 1: full text is a valid JSON array
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: find outermost [...] block
+    m = re.search(r"\[[\s\S]*\]", text)
+    if m:
+        try:
+            parsed = json.loads(m.group())
+            if isinstance(parsed, list):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+    # Strategy 3: collect individual {...} objects
+    objects = re.findall(r"\{(?:[^{}]|\{[^{}]*\})*\}", text, re.DOTALL)
+    if objects:
+        try:
+            parsed = [json.loads(o) for o in objects]
+            if all(isinstance(o, dict) for o in parsed):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+    raise LLMInterpretationError(
+        f"Could not extract JSON array from response: {text[:400]!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public interface
 # ---------------------------------------------------------------------------
 
 def interpret_notes(request: ScenarioRequest) -> list[dict[str, Any]]:
-    """Call Gemini to interpret operator notes.
+    """Call Gemini to interpret operator notes into structured directives.
 
-    Returns a list of raw dicts — NOT yet validated by guardrails.
-    Raises LLMInterpretationError on unrecoverable failures.
+    Retries up to _MAX_RETRIES times with exponential backoff on transient
+    errors (503 / high demand / empty output). Raises LLMInterpretationError
+    on auth failures or when all retries are exhausted.
     """
     client = get_client()
-    n_notes = len(request.operator_notes)
     user_prompt = _build_user_prompt(request)
+    config = _make_config()
+    model = settings.gemini_model
+    last_exc: Exception | None = None
 
-    try:
-        response = client.models.generate_content(
-            model=settings.gemini_model,
-            contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=_SYSTEM_INSTRUCTION,
-                response_mime_type="application/json",
-                response_schema=_build_response_schema(n_notes),
-                temperature=0.0,   # fully deterministic
-                max_output_tokens=2048,
-            ),
-        )
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            logger.info("LLM attempt %d/%d model=%s", attempt, _MAX_RETRIES, model)
 
-        raw_text = response.text
-        logger.debug("LLM raw response: %s", raw_text)
-
-        parsed: list[dict[str, Any]] = json.loads(raw_text)
-        if not isinstance(parsed, list):
-            raise LLMInterpretationError(
-                f"LLM returned non-list JSON: {type(parsed).__name__}"
+            response = client.models.generate_content(
+                model=model,
+                contents=user_prompt,
+                config=config,
             )
-        return parsed
 
-    except json.JSONDecodeError as exc:
-        logger.error("LLM returned non-JSON output: %s", exc)
-        raise LLMInterpretationError(f"LLM JSON parse failure: {exc}") from exc
-    except Exception as exc:
-        logger.error("LLM call failed: %s", exc)
-        raise LLMInterpretationError(f"LLM call error: {exc}") from exc
+            raw_text = _extract_text_from_response(response)
+            if not raw_text:
+                logger.warning("LLM attempt %d: empty response", attempt)
+                last_exc = LLMInterpretationError("Empty response text")
+                time.sleep(2 ** (attempt - 1))
+                continue
+
+            logger.debug("LLM raw: %.600s", raw_text)
+            parsed = _extract_json_array(raw_text)
+            logger.info("LLM attempt %d: OK — %d item(s)", attempt, len(parsed))
+            return parsed
+
+        except LLMInterpretationError:
+            raise
+        except Exception as exc:
+            err_str = str(exc)
+            logger.warning("LLM attempt %d exception: %s", attempt, err_str)
+            last_exc = exc
+            if any(k in err_str.lower() for k in ("permission", "api_key", "401", "403")):
+                raise LLMInterpretationError(f"Auth error: {exc}") from exc
+            if attempt < _MAX_RETRIES:
+                backoff = min(2 ** (attempt - 1), 16)  # 1s, 2s, 4s, 8s, 16s
+                logger.info("Backing off %ds before retry", backoff)
+                time.sleep(backoff)
+
+    raise LLMInterpretationError(
+        f"All {_MAX_RETRIES} attempts failed. Last error: {last_exc}"
+    ) from last_exc

@@ -3,7 +3,7 @@
 **BUP CSE Fest 2026 Hackathon · Online Preliminary Round**
 
 An HTTP API service that interprets natural-language campus operator notes using
-**Google Gemini 2.5 Flash**, validates the extracted directives through
+**Google Gemini 3.6 Flash**, validates the extracted directives through
 deterministic guardrails, and produces a cost-minimised 24-hour energy schedule
 using a **Linear Programming** solver (Google OR-Tools GLOP).
 
@@ -16,7 +16,7 @@ POST /optimize-energy
          │
          ▼
 ┌─────────────────────┐
-│  1. LLM Interpreter │  Gemini 2.5 Flash — structured JSON output
+│  1. LLM Interpreter │  Gemini 3.6 Flash — structured JSON output
 │     (untrusted)     │  Classifies each operator note into one of:
 └────────┬────────────┘  solar_reduction | minimum_battery_reserve |
          │              no_charge_window | no_discharge_window |
@@ -77,7 +77,7 @@ Required environment variables:
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `GEMINI_API_KEY` | **Yes** | — | Google Gemini API key |
-| `GEMINI_MODEL` | No | `gemini-2.5-flash` | Gemini model name |
+| `GEMINI_MODEL` | No | `gemini-3.6-flash` | Gemini model name |
 | `PORT` | No | `8000` | Server port |
 
 ### 3. Run the service
@@ -222,7 +222,7 @@ Returns service readiness.
 ## LLM Role & Guardrails
 
 ### LLM Role
-Gemini 2.5 Flash interprets each `operator_note` into a structured directive
+Gemini 3.6 Flash interprets each `operator_note` into a structured directive
 via a detailed system prompt with few-shot examples. It uses Gemini's native
 `response_schema` parameter to force valid JSON output — no regex parsing.
 
@@ -308,7 +308,7 @@ docker run -d -p 8000:8000 -e GEMINI_API_KEY=your_key <REGISTRY>/gridwise-llm:<T
 | `uvicorn[standard]` | ASGI server |
 | `pydantic` v2 | Request/response schema validation |
 | `pydantic-settings` | Environment variable loading |
-| `google-genai` | Gemini 2.5 Flash SDK |
+| `google-genai` | Gemini 3.6 Flash SDK |
 | `ortools` | Google OR-Tools GLOP LP solver |
 | `python-dotenv` | `.env` file loading |
 | `httpx` | Async HTTP client (for tests) |
@@ -363,7 +363,7 @@ gridwise-llm/
 ## Credits
 
 - **Google OR-Tools** — LP/MILP solver (open source, Apache 2.0)
-- **Google Gemini 2.5 Flash** — LLM for operator-note interpretation
+- **Google Gemini 3.6 Flash** — LLM for operator-note interpretation
 - **FastAPI** — Python web framework
 - **Pydantic v2** — Data validation
 - Built for: **BUP CSE Fest 2026 Hackathon** · GridWise LLM Challenge
