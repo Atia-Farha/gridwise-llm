@@ -6,7 +6,7 @@ An enterprise-grade HTTP API service that interprets natural-language campus ope
 
 ---
 
-## 🏛️ System Architecture
+## System Architecture
 
 ```mermaid
 flowchart TD
@@ -42,7 +42,7 @@ flowchart TD
 
 ---
 
-## 📋 Evaluation Checklist & Rubric Mapping
+## Evaluation Checklist & Rubric Mapping
 
 This repository is built for 100% reproducibility and strict adherence to the [Evaluation Rubric](file:///home/atia-farha/Documents/Projects/BUP_CSE_Fest_Hackathon/gridwise-llm/BUP_CSE_FEST_2026_Participant_Guide_&_Evaluation_Rubric_GridWise_LLM.md):
 
@@ -58,7 +58,7 @@ This repository is built for 100% reproducibility and strict adherence to the [E
 
 ---
 
-## 🚀 Quick Start (Local Setup)
+## Quick Start (Local Setup)
 
 ### Prerequisites
 
@@ -128,9 +128,19 @@ Or run the automated sample case test suite:
 pytest tests/test_sample_cases.py -v
 ```
 
+### 6. Interactive API Documentation (Swagger & ReDoc)
+
+FastAPI automatically generates interactive OpenAPI documentation. Once the server is running, access:
+
+| Documentation UI | Endpoint URL | Purpose |
+|---|---|---|
+| **Swagger UI** | `http://localhost:8000/docs` | Interactive API testing and schema inspection |
+| **ReDoc UI** | `http://localhost:8000/redoc` | Clean human-readable API documentation |
+| **OpenAPI Specification** | `http://localhost:8000/openapi.json` | Raw OpenAPI 3.1 JSON schema |
+
 ---
 
-## 🤖 LLM Role & Guardrail Architecture
+## LLM Role & Guardrail Architecture
 
 ### Mandatory LLM Role
 Google Gemini 3.6 Flash acts as the natural-language perception front-end for `operator_notes`. It converts unstructured text into a machine-readable JSON array of directive candidates.
@@ -159,7 +169,7 @@ Raw LLM output is treated as **untrusted data**. The guardrail module ([guardrai
 
 ---
 
-## 🧮 Linear Programming (LP) Optimizer
+## Linear Programming (LP) Optimizer
 
 Energy scheduling is solved using **Google OR-Tools GLOP** simplex linear programming solver.
 
@@ -194,7 +204,7 @@ $$\text{Minimise } \sum_{h=0}^{23} \left( P_{\text{grid}}[h] \cdot \text{tariff}
 
 ---
 
-## 🐳 Docker Deployment & Fallback
+## Docker Deployment & Fallback
 
 ### Build Docker Image
 
@@ -223,9 +233,9 @@ curl http://localhost:8000/health
 
 ---
 
-## 🧪 Testing & Validation
+## Testing & Validation
 
-Run the complete test suite (49 passing tests):
+Run the complete test suite (52 passing tests):
 
 ```bash
 # Run all tests
@@ -235,12 +245,13 @@ pytest tests/ -v
 pytest tests/test_guardrails.py -v   # Guardrail sanitization tests
 pytest tests/test_optimizer.py -v    # LP formulation tests
 pytest tests/test_api.py -v          # HTTP API & Pydantic validation tests
+pytest tests/test_health.py -v       # Health, Swagger /docs, /redoc & openapi tests
 pytest tests/test_sample_cases.py -v   # Full pipeline public case integration tests
 ```
 
 ---
 
-## 🛠️ Project Structure
+## Project Structure
 
 ```text
 gridwise-llm/
@@ -262,7 +273,7 @@ gridwise-llm/
 │   └── utils/
 │       ├── constants.py      # Shared constants & tolerances
 │       └── exceptions.py     # Custom exception hierarchy
-├── tests/                    # 49 unit and integration tests
+├── tests/                    # 52 unit and integration tests
 ├── sample_cases/             # Public sample case datasets
 ├── Dockerfile                # Multi-stage lean build
 ├── docker-compose.yml        # Development environment composition
@@ -273,7 +284,7 @@ gridwise-llm/
 
 ---
 
-## 📜 Credits & Dependencies
+## Credits & Dependencies
 
 * **Google OR-Tools** — Open-source Linear Programming solver (Apache 2.0)
 * **Google Gemini 3.6 Flash** — Generative language model for operator note interpretation
