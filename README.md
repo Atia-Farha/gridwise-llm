@@ -151,9 +151,9 @@ Raw LLM output is treated as **untrusted data**. The guardrail module ([guardrai
 | 5 | **Applies Semantics** | `applies = true` for active directives; `applies = false` only for `no_op`. |
 | 6 | **No-Op Nullity** | `no_op` forces `structured_adjustment = null`. |
 | 7 | **Hours Sanitization** | Filtered to unique integers `0..23` in ascending order. |
-| 8 | **Solar Factor Bounds** | Clamped to $0.0 \le \text{factor} \le 1.0$ (remaining fraction). |
-| 9 | **Battery Reserve Bounds** | Clamped to $0.0 \le \text{reserve} \le \text{capacity\_kwh}$. |
-| 10 | **Grid Cap Bounds** | Clamped to $\text{max\_grid\_kwh} \ge 0.0$. |
+| 8 | **Solar Factor Bounds** | Clamped to `0.0 <= factor <= 1.0` (remaining fraction). |
+| 9 | **Battery Reserve Bounds** | Clamped to `0.0 <= reserve <= capacity_kwh`. |
+| 10 | **Grid Cap Bounds** | Clamped to `max_grid_kwh >= 0.0`. |
 | 11 | **Shape Integrity** | Missing dictionary fields convert entry to `no_op`. |
 | 12 | **Safe Degradation** | Complete LLM downtime falls back to an all-`no_op` array without crashing. |
 
@@ -164,33 +164,33 @@ Raw LLM output is treated as **untrusted data**. The guardrail module ([guardrai
 Energy scheduling is solved using **Google OR-Tools GLOP** simplex linear programming solver.
 
 ### Decision Variables (for each hour $h \in \{0..23\}$):
-* $\text{grid}[h] \ge 0$: Grid electricity purchased (kWh)
-* $\text{solar\_used}[h] \ge 0$: Solar energy consumed (kWh)
-* $\text{charge}[h] \ge 0$: Battery charge amount (kWh)
-* $ \text{discharge}[h] \ge 0$: Battery discharge amount (kWh)
+* $P_{\text{grid}}[h] \ge 0$: Grid electricity purchased (kWh)
+* $P_{\text{solar}}[h] \ge 0$: Solar energy consumed (kWh)
+* $P_{\text{charge}}[h] \ge 0$: Battery charge amount (kWh)
+* $P_{\text{discharge}}[h] \ge 0$: Battery discharge amount (kWh)
 * $E[h] \ge 0$: Battery energy state after hour $h$ (kWh)
 
 ### Objective Function:
-$$\text{Minimise } \sum_{h=0}^{23} \left( \text{grid}[h] \times \text{tariff}[h] + \epsilon \cdot (\text{charge}[h] + \text{discharge}[h]) \right)$$
+$$\text{Minimise } \sum_{h=0}^{23} \left( P_{\text{grid}}[h] \cdot \text{tariff}[h] + \epsilon \cdot (P_{\text{charge}}[h] + P_{\text{discharge}}[h]) \right)$$
 *(where $\epsilon = 10^{-4}$ acts as a negligible tie-breaker preventing simultaneous charge and discharge)*.
 
 ### Governing Constraints:
 1. **Hourly Energy Balance**:
-   $$\text{grid}[h] + \text{solar\_used}[h] + \text{discharge}[h] = \text{demand}[h] + \text{charge}[h]$$
+   $$P_{\text{grid}}[h] + P_{\text{solar}}[h] + P_{\text{discharge}}[h] = \text{demand}[h] + P_{\text{charge}}[h]$$
 2. **Solar Resource Bounds**:
-   $$0 \le \text{solar\_used}[h] \le \text{effective\_solar}[h]$$
+   $$0 \le P_{\text{solar}}[h] \le S_{\text{effective}}[h]$$
 3. **Battery Storage Limits**:
-   $$\max(\text{minimum\_energy}, \text{directive\_min}[h]) \le E[h] \le \text{capacity\_kwh}$$
+   $$\max(E_{\text{min}}, R_{\text{directive}}[h]) \le E[h] \le C_{\text{battery}}$$
 4. **Hourly Rate Limits**:
-   $$0 \le \text{charge}[h] \le \text{max\_charge\_kwh\_per\_hour}$$
-   $$0 \le \text{discharge}[h] \le \text{max\_discharge\_kwh\_per\_hour}$$
+   $$0 \le P_{\text{charge}}[h] \le P_{\text{charge, max}}$$
+   $$0 \le P_{\text{discharge}}[h] \le P_{\text{discharge, max}}$$
 5. **End-of-Day Neutrality**:
-   $$E[23] = \text{initial\_energy\_kwh}$$
+   $$E[23] = E_{\text{initial}}$$
 6. **Active Directive Constraints**:
-   * `solar_reduction`: $\text{effective\_solar}[h] = \text{solar\_kwh}[h] \times \text{factor}$
-   * `no_charge_window`: $\text{charge}[h] = 0$
-   * `no_discharge_window`: $\text{discharge}[h] = 0$
-   * `max_grid_window`: $\text{grid}[h] \le \text{max\_grid\_kwh}$
+   * `solar_reduction`: $S_{\text{effective}}[h] = S_{\text{base}}[h] \cdot \text{factor}$
+   * `no_charge_window`: $P_{\text{charge}}[h] = 0$
+   * `no_discharge_window`: $P_{\text{discharge}}[h] = 0$
+   * `max_grid_window`: $P_{\text{grid}}[h] \le G_{\text{max}}[h]$
 
 ---
 
