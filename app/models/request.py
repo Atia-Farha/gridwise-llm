@@ -31,11 +31,11 @@ class BatteryConfig(BaseModel):
                 f"minimum_energy_kwh ({self.minimum_energy_kwh}) "
                 f"exceeds capacity_kwh ({self.capacity_kwh})"
             )
-        if self.initial_energy_kwh < self.minimum_energy_kwh:
-            raise ValueError(
-                f"initial_energy_kwh ({self.initial_energy_kwh}) "
-                f"is below minimum_energy_kwh ({self.minimum_energy_kwh})"
-            )
+        # A battery sitting below its policy floor is unusual but physically
+        # real, and end-of-day neutrality pins the final state to that same
+        # level. The optimizer honours the starting level as the floor rather
+        # than rejecting the scenario outright, so it is deliberately not
+        # validated here — rejecting it would forfeit an otherwise solvable case.
         return self
 
 

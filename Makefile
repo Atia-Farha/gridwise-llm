@@ -1,60 +1,70 @@
-.PHONY: install run test test-unit test-sample docker-build docker-run docker-up clean
+.PHONY: help install run test test-sample eval docker-build docker-run compose-up compose-down health sample clean
+
+PY ?= python
+PORT ?= 8000
+BASE ?= http://localhost:$(PORT)
+IMAGE ?= gridwise-llm:latest
+
+help:
+	@echo "install       Create .venv and install dependencies"
+	@echo "run           Start the API on port $(PORT)"
+	@echo "test          Run the offline test suite"
+	@echo "eval          Score the live model on the 10 public cases (needs OPENAI_API_KEY)"
+	@echo "health        Call GET /health"
+	@echo "sample        POST the first public sample case"
+	@echo "docker-build  Build the container image"
+	@echo "compose-up    Start the local stack (API + Redis)"
 
 # ── Local development ──────────────────────────────────────────────────────
 
 install:
-	python3 -m venv .venv
-	.venv/bin/pip install --upgrade pip
-	.venv/bin/pip install -r requirements.txt
+	$(PY) -m venv .venv
+	./.venv/bin/pip install --upgrade pip
+	./.venv/bin/pip install -r requirements.txt
 
 run:
-	.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+	uvicorn app.main:app --host 0.0.0.0 --port $(PORT)
+
+dev:
+	uvicorn app.main:app --host 0.0.0.0 --port $(PORT) --reload
 
 # ── Testing ────────────────────────────────────────────────────────────────
 
 test:
-	.venv/bin/pytest tests/ -v
-
-test-unit:
-	.venv/bin/pytest tests/test_health.py tests/test_guardrails.py tests/test_optimizer.py tests/test_api.py -v
+	pytest tests/ -q
 
 test-sample:
-	.venv/bin/pytest tests/test_sample_cases.py -v
+	pytest tests/test_sample_cases.py -v
+
+# Live-model accuracy check. The suite above mocks the provider; this does not.
+eval:
+	$(PY) scripts/eval_interpretation.py
 
 # ── Docker ─────────────────────────────────────────────────────────────────
 
 docker-build:
-	docker build -t gridwise-llm:latest .
+	docker build -t $(IMAGE) .
 
 docker-run:
-	docker run -d \
-		-p 8000:8000 \
-		-e GEMINI_API_KEY=$${GEMINI_API_KEY} \
-		--name gridwise \
-		gridwise-llm:latest
+	docker run --rm -p $(PORT):8000 -e OPENAI_API_KEY=$$OPENAI_API_KEY $(IMAGE)
 
-docker-up:
-	docker compose up --build
+compose-up:
+	docker compose -f docker-compose.local.yml up --build
 
-docker-stop:
-	docker compose down
+compose-down:
+	docker compose -f docker-compose.local.yml down
 
-# ── Utilities ──────────────────────────────────────────────────────────────
+# ── Verification ───────────────────────────────────────────────────────────
 
 health:
-	curl -s http://localhost:8000/health | python3 -m json.tool
+	curl -fsS $(BASE)/health && echo
 
-sample-01:
-	@python3 -c " \
-import json, sys; \
-cases = json.load(open('sample_cases/public_cases.json')); \
-print(json.dumps(cases['cases'][0]['input'])) \
-" | curl -s -X POST http://localhost:8000/optimize-energy \
-		-H 'Content-Type: application/json' \
-		-d @- | python3 -m json.tool
+sample:
+	@$(PY) -c "import json;print(json.dumps(json.load(open('sample_cases/public_cases.json'))['cases'][0]['input']))" \
+		| curl -fsS -X POST $(BASE)/optimize-energy -H 'Content-Type: application/json' -d @- \
+		| $(PY) -m json.tool
 
 clean:
-	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null; \
-	find . -name "*.pyc" -delete 2>/dev/null; \
-	rm -rf .pytest_cache .coverage htmlcov; \
-	echo "Cleaned."
+	@find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+	@rm -rf .pytest_cache .coverage htmlcov
+	@echo "Cleaned."

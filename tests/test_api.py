@@ -1,9 +1,6 @@
-"""Tests for POST /optimize-energy schema validation (no LLM, mocked orchestrator)."""
+"""Tests for POST /optimize-energy request/response schema validation."""
 
-import json
-from unittest.mock import patch
-
-import pytest
+from tests.conftest import no_op_interps, patch_llm
 
 
 VALID_REQUEST = {
@@ -24,12 +21,18 @@ VALID_REQUEST = {
 
 
 class TestRequestValidation:
-    def test_malformed_json_returns_422(self, client):
+    def test_malformed_json_returns_400(self, client):
+        """Problem Statement 6.1 reserves 400 for unparseable bodies."""
         resp = client.post(
             "/optimize-energy",
             content="not-json",
             headers={"Content-Type": "application/json"},
         )
+        assert resp.status_code == 400
+
+    def test_well_formed_but_invalid_returns_422(self, client):
+        """A parseable body that fails semantic validation stays 422."""
+        resp = client.post("/optimize-energy", json={"scenario_id": "X"})
         assert resp.status_code == 422
 
     def test_missing_scenario_id_returns_422(self, client):
@@ -83,16 +86,7 @@ class TestRequestValidation:
 class TestResponseSchema:
     def test_response_echoes_scenario_id(self, client):
         """Run with mocked LLM to avoid real API calls in schema tests."""
-        mock_interps = [
-            {
-                "note_index": 0,
-                "applies": False,
-                "directive_type": "no_op",
-                "structured_adjustment": None,
-                "explanation": "Irrelevant note.",
-            }
-        ]
-        with patch("app.services.llm_interpreter.interpret_notes", return_value=mock_interps):
+        with patch_llm(no_op_interps(1)):
             resp = client.post("/optimize-energy", json=VALID_REQUEST)
 
         assert resp.status_code == 200
@@ -100,11 +94,7 @@ class TestResponseSchema:
         assert data["scenario_id"] == "TEST-001"
 
     def test_response_has_all_required_fields(self, client):
-        mock_interps = [
-            {"note_index": 0, "applies": False, "directive_type": "no_op",
-             "structured_adjustment": None, "explanation": "no_op"}
-        ]
-        with patch("app.services.llm_interpreter.interpret_notes", return_value=mock_interps):
+        with patch_llm(no_op_interps(1)):
             resp = client.post("/optimize-energy", json=VALID_REQUEST)
 
         assert resp.status_code == 200
@@ -116,11 +106,7 @@ class TestResponseSchema:
         assert required_fields.issubset(data.keys())
 
     def test_hourly_plan_has_24_entries(self, client):
-        mock_interps = [
-            {"note_index": 0, "applies": False, "directive_type": "no_op",
-             "structured_adjustment": None, "explanation": "no_op"}
-        ]
-        with patch("app.services.llm_interpreter.interpret_notes", return_value=mock_interps):
+        with patch_llm(no_op_interps(1)):
             resp = client.post("/optimize-energy", json=VALID_REQUEST)
 
         assert resp.status_code == 200
@@ -128,13 +114,7 @@ class TestResponseSchema:
 
     def test_directive_interpretation_count_matches_notes(self, client):
         req = {**VALID_REQUEST, "operator_notes": ["Note A", "Note B"]}
-        mock_interps = [
-            {"note_index": 0, "applies": False, "directive_type": "no_op",
-             "structured_adjustment": None, "explanation": "A"},
-            {"note_index": 1, "applies": False, "directive_type": "no_op",
-             "structured_adjustment": None, "explanation": "B"},
-        ]
-        with patch("app.services.llm_interpreter.interpret_notes", return_value=mock_interps):
+        with patch_llm(no_op_interps(2)):
             resp = client.post("/optimize-energy", json=req)
 
         assert resp.status_code == 200

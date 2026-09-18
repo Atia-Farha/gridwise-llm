@@ -50,6 +50,10 @@ def replay_validate(
     battery: BatteryConfig = request.battery
     hour_map = {h.hour: h for h in request.hours}
 
+    # Mirrors the optimizer: a scenario starting below its stated minimum is
+    # held to its starting level, since end-of-day neutrality pins E[23] there.
+    base_floor = min(battery.minimum_energy_kwh, battery.initial_energy_kwh)
+
     E = battery.initial_energy_kwh  # running battery state
 
     for entry in plan:
@@ -108,7 +112,7 @@ def replay_validate(
         E += charge_kwh - discharge_kwh
 
         # 7. Battery bounds
-        active_min = _active_min_reserve(h, battery.minimum_energy_kwh, directives)
+        active_min = _active_min_reserve(h, base_floor, directives)
         if E < active_min - TOL:
             raise ReplayValidationError(
                 f"hour {h}: battery_energy {E:.4f} below minimum {active_min}"

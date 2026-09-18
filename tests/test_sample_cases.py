@@ -9,13 +9,10 @@ interpretations directly, then verify the optimizer produces a schedule that:
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-from unittest.mock import patch
-
 import pytest
 
 from app.utils.constants import NUMERIC_TOLERANCE
+from tests.conftest import patch_llm
 
 TOL = NUMERIC_TOLERANCE
 
@@ -47,10 +44,7 @@ def test_sample_case_optimizer(client, sample_cases, case_index):
 
     ground_truth_interps = _expected_raw_interps(case)
 
-    with patch(
-        "app.services.llm_interpreter.interpret_notes",
-        return_value=ground_truth_interps,
-    ):
+    with patch_llm(ground_truth_interps):
         resp = client.post("/optimize-energy", json=req_body)
 
     assert resp.status_code == 200, f"Non-200 response: {resp.text}"
@@ -85,6 +79,26 @@ def test_sample_case_optimizer(client, sample_cases, case_index):
             for h in di["structured_adjustment"]["hours"]:
                 effective_solar[h] = hour_map[h]["solar_kwh"] * factor
 
+    # Per-hour floor, including any reserve raised by a directive. Checking
+    # only the base minimum would let a minimum_battery_reserve violation pass.
+    floor = {h: battery["minimum_energy_kwh"] for h in range(24)}
+    grid_cap: dict[int, float] = {}
+    no_charge: set[int] = set()
+    no_discharge: set[int] = set()
+    for di in data["directive_interpretation"]:
+        if not di["applies"]:
+            continue
+        adj = di["structured_adjustment"] or {}
+        for h in adj.get("hours", []):
+            if di["directive_type"] == "minimum_battery_reserve":
+                floor[h] = max(floor[h], adj["minimum_energy_kwh"])
+            elif di["directive_type"] == "max_grid_window":
+                grid_cap[h] = min(grid_cap.get(h, float("inf")), adj["max_grid_kwh"])
+            elif di["directive_type"] == "no_charge_window":
+                no_charge.add(h)
+            elif di["directive_type"] == "no_discharge_window":
+                no_discharge.add(h)
+
     E = battery["initial_energy_kwh"]
     for entry in data["hourly_plan"]:
         h = entry["hour"]
@@ -106,11 +120,29 @@ def test_sample_case_optimizer(client, sample_cases, case_index):
         )
 
         # Battery state
+        # Rate limits
+        assert charge <= battery["max_charge_kwh_per_hour"] + TOL
+        assert discharge <= battery["max_discharge_kwh_per_hour"] + TOL
+
+        # Directive application
+        assert h not in no_charge or charge <= TOL, (
+            f"case {case_index} hour {h}: no_charge_window violated"
+        )
+        assert h not in no_discharge or discharge <= TOL, (
+            f"case {case_index} hour {h}: no_discharge_window violated"
+        )
+        if h in grid_cap:
+            assert entry["grid_kwh"] <= grid_cap[h] + TOL, (
+                f"case {case_index} hour {h}: max_grid_window violated"
+            )
+
         E += charge - discharge
         assert abs(E - entry["battery_energy_after_kwh"]) <= TOL, (
             f"case {case_index} hour {h}: battery state mismatch"
         )
-        assert E >= battery["minimum_energy_kwh"] - TOL
+        assert E >= floor[h] - TOL, (
+            f"case {case_index} hour {h}: battery {E} below required floor {floor[h]}"
+        )
         assert E <= battery["capacity_kwh"] + TOL
 
     # End-of-day neutrality
@@ -125,9 +157,9 @@ def test_sample_case_optimizer(client, sample_cases, case_index):
     # are correctly applied; slight difference may occur from floating point)
     if expected_cost > TOL:
         ratio = our_cost / expected_cost
-        assert ratio <= 1.01, (
-            f"case {case_index}: cost ratio {ratio:.4f} exceeds 1.01 "
-            f"(our={our_cost}, expected={expected_cost})"
+        assert ratio <= 1.0001, (
+            f"case {case_index}: cost ratio {ratio:.6f} is above the reference "
+            f"optimum (our={our_cost}, expected={expected_cost})"
         )
 
     # ── Recalculated totals match reported totals ─────────────────────────
