@@ -115,7 +115,7 @@ Cases:  10 × 1 run(s)
 SAMPLE-01        PASS  2/2 notes   1.42s
 ...
 ──────────────────────────────────────────────────────────
-Notes correct : 14/14
+Notes correct : 18/18
 Cases perfect : 10/10
 Latency       : mean 1.51s  p95 2.20s
 ──────────────────────────────────────────────────────────
@@ -123,6 +123,35 @@ Latency       : mean 1.51s  p95 2.20s
 
 Useful flags: `--case SAMPLE-03`, `--model gpt-5.6-terra`, `--repeat 3`
 (paraphrase stability), `--effort medium`.
+
+### Verify a running deployment
+
+`scripts/verify_deployment.py` scores a **live URL** end to end and needs no
+local API key, because the deployed service holds one. It replays every
+returned schedule against the **organizer ground-truth** directives — not
+against the service's own reading — so a correct extraction paired with a
+non-compliant schedule still fails.
+
+```bash
+python scripts/verify_deployment.py https://your-host
+```
+
+Measured against the live deployment:
+
+```
+case          interp   sched    ratio    time
+----------------------------------------------
+SAMPLE-01   2/2           OK  1.00000   0.84s
+...
+SAMPLE-10   3/3           OK  1.00000   4.18s
+----------------------------------------------
+Notes correct        : 18/18
+Cases interp-perfect : 10/10
+Cases schedule-valid : 10/10
+Cost quality (avg)   : 1.00000  -> 10.00/10 pts
+Latency              : mean 2.10s  p95 4.18s
+----------------------------------------------
+```
 
 ### Interactive docs
 

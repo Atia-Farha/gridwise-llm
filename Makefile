@@ -1,4 +1,4 @@
-.PHONY: help install run test test-sample eval docker-build docker-run compose-up compose-down health sample clean
+.PHONY: help install run test test-sample eval verify docker-build docker-run compose-up compose-down health sample clean
 
 PY ?= python
 PORT ?= 8000
@@ -10,6 +10,7 @@ help:
 	@echo "run           Start the API on port $(PORT)"
 	@echo "test          Run the offline test suite"
 	@echo "eval          Score the live model on the 10 public cases (needs OPENAI_API_KEY)"
+	@echo "verify        Score a running deployment: make verify BASE=https://host"
 	@echo "health        Call GET /health"
 	@echo "sample        POST the first public sample case"
 	@echo "docker-build  Build the container image"
@@ -36,7 +37,12 @@ test:
 test-sample:
 	pytest tests/test_sample_cases.py -v
 
-# Live-model accuracy check. The suite above mocks the provider; this does not.
+# Score a running deployment end-to-end. Needs no local key — the service has one.
+#   make verify BASE=https://your-host
+verify:
+	$(PY) scripts/verify_deployment.py $(BASE)
+
+# Live-model accuracy check in-process. The suite above mocks the provider; this does not.
 eval:
 	$(PY) scripts/eval_interpretation.py
 
