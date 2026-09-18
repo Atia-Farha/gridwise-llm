@@ -108,9 +108,21 @@ async def validation_exception_handler(
     """
     errors = exc.errors()
     malformed = any(e.get("type") == "json_invalid" for e in errors)
+
+    # Keep only what identifies the problem. Pydantic's default entry carries
+    # an `input` field holding the entire offending payload, which echoes a
+    # full 24-hour scenario back on every validation failure.
+    detail = [
+        {
+            "type": e.get("type"),
+            "loc": list(e.get("loc", [])),
+            "msg": e.get("msg"),
+        }
+        for e in errors
+    ]
     return JSONResponse(
         status_code=400 if malformed else 422,
-        content={"detail": _json_safe(errors)},
+        content={"detail": _json_safe(detail)},
     )
 
 
