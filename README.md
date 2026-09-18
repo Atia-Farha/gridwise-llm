@@ -164,33 +164,33 @@ Raw LLM output is treated as **untrusted data**. The guardrail module ([guardrai
 Energy scheduling is solved using **Google OR-Tools GLOP** simplex linear programming solver.
 
 ### Decision Variables (for each hour $h \in \{0..23\}$):
-* $grid[h] \ge 0$: Grid electricity purchased (kWh)
-* $solar\_used[h] \ge 0$: Solar energy consumed (kWh)
-* $charge[h] \ge 0$: Battery charge amount (kWh)
-* $discharge[h] \ge 0$: Battery discharge amount (kWh)
+* $\text{grid}[h] \ge 0$: Grid electricity purchased (kWh)
+* $\text{solar\_used}[h] \ge 0$: Solar energy consumed (kWh)
+* $\text{charge}[h] \ge 0$: Battery charge amount (kWh)
+* $ \text{discharge}[h] \ge 0$: Battery discharge amount (kWh)
 * $E[h] \ge 0$: Battery energy state after hour $h$ (kWh)
 
 ### Objective Function:
-$$\text{Minimise } \sum_{h=0}^{23} \left( grid[h] \times tariff[h] + \epsilon \cdot (charge[h] + discharge[h]) \right)$$
+$$\text{Minimise } \sum_{h=0}^{23} \left( \text{grid}[h] \times \text{tariff}[h] + \epsilon \cdot (\text{charge}[h] + \text{discharge}[h]) \right)$$
 *(where $\epsilon = 10^{-4}$ acts as a negligible tie-breaker preventing simultaneous charge and discharge)*.
 
 ### Governing Constraints:
 1. **Hourly Energy Balance**:
-   $$grid[h] + solar\_used[h] + discharge[h] = demand[h] + charge[h]$$
+   $$\text{grid}[h] + \text{solar\_used}[h] + \text{discharge}[h] = \text{demand}[h] + \text{charge}[h]$$
 2. **Solar Resource Bounds**:
-   $$0 \le solar\_used[h] \le \text{effective\_solar}[h]$$
+   $$0 \le \text{solar\_used}[h] \le \text{effective\_solar}[h]$$
 3. **Battery Storage Limits**:
    $$\max(\text{minimum\_energy}, \text{directive\_min}[h]) \le E[h] \le \text{capacity\_kwh}$$
 4. **Hourly Rate Limits**:
-   $$0 \le charge[h] \le \text{max\_charge\_kwh\_per\_hour}$$
-   $$0 \le discharge[h] \le \text{max\_discharge\_kwh\_per\_hour}$$
+   $$0 \le \text{charge}[h] \le \text{max\_charge\_kwh\_per\_hour}$$
+   $$0 \le \text{discharge}[h] \le \text{max\_discharge\_kwh\_per\_hour}$$
 5. **End-of-Day Neutrality**:
    $$E[23] = \text{initial\_energy\_kwh}$$
 6. **Active Directive Constraints**:
    * `solar_reduction`: $\text{effective\_solar}[h] = \text{solar\_kwh}[h] \times \text{factor}$
-   * `no_charge_window`: $charge[h] = 0$
-   * `no_discharge_window`: $discharge[h] = 0$
-   * `max_grid_window`: $grid[h] \le \text{max\_grid\_kwh}$
+   * `no_charge_window`: $\text{charge}[h] = 0$
+   * `no_discharge_window`: $\text{discharge}[h] = 0$
+   * `max_grid_window`: $\text{grid}[h] \le \text{max\_grid\_kwh}$
 
 ---
 
