@@ -1,0 +1,11 @@
+.dockerignore
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.git/
+.pytest_cache/
+htmlcov/
+*.log
+tests/
